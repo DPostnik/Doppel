@@ -31,7 +31,40 @@ if (!fs.existsSync(path.join(HERE, "node_modules/electron/dist"))) {
   execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: HERE, stdio: "inherit" });
   execFileSync("node", ["node_modules/electron/install.js"], { cwd: HERE, stdio: "inherit" });
 }
-const electron = createRequire(path.join(HERE, "package.json"))("electron");
+const electron = macBundle(createRequire(path.join(HERE, "package.json"))("electron"));
+
+// macOS takes the Dock and menu-bar name from the app bundle, not from the
+// running app, so an unpackaged Electron shows up as "Electron". Run a copy
+// of Electron.app renamed to Doppel instead; it is rebuilt when Electron
+// changes. The copy is an APFS clone where possible, so it costs no space.
+function macBundle(bin) {
+  if (process.platform !== "darwin") return bin;
+  const src = bin.replace(/\/Contents\/MacOS\/[^/]+$/, "");
+  const dst = path.join(HERE, "node_modules/.doppel/Doppel.app");
+  const exe = path.join(dst, "Contents/MacOS", path.basename(bin));
+  const plist = path.join(dst, "Contents/Info.plist");
+  const version = (p) => {
+    try {
+      return execFileSync("plutil", ["-extract", "CFBundleVersion", "raw", p], { encoding: "utf8" }).trim();
+    } catch {
+      return null;
+    }
+  };
+  if (fs.existsSync(exe) && version(plist) === version(path.join(src, "Contents/Info.plist"))) return exe;
+  fs.rmSync(dst, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  try {
+    execFileSync("cp", ["-cR", src, dst]);
+  } catch {
+    execFileSync("cp", ["-R", src, dst]);
+  }
+  for (const key of ["CFBundleName", "CFBundleDisplayName"])
+    execFileSync("plutil", ["-replace", key, "-string", "Doppel", plist]);
+  execFileSync("plutil", ["-replace", "CFBundleIdentifier", "-string", "com.dpostnik.doppel", plist]);
+  // The edited Info.plist breaks Electron's ad-hoc signature; sign it again.
+  execFileSync("codesign", ["--force", "--sign", "-", dst], { stdio: "ignore" });
+  return exe;
+}
 
 const c = await loadConfig();
 const argv = ownArgs(process.argv.slice(2));
