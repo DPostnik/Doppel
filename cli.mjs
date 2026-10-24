@@ -5,7 +5,13 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 const TOOLS = { up: "up.mjs", shots: "shots.mjs", styles: "styles.mjs", mirror: "mirror.mjs" };
-const [cmd, ...args] = process.argv.slice(2);
+// The command is the first word that is not a common option or its value, so
+// `doppel --project ../app shots` works as well as `doppel shots --project ../app`.
+const COMMON = ["--project", "--config", "--ports", "--name"];
+const argv = process.argv.slice(2);
+const at = argv.findIndex((a, i) => !a.startsWith("--") && !COMMON.includes(argv[i - 1]));
+const cmd = at < 0 ? undefined : argv[at];
+const args = at < 0 ? argv : [...argv.slice(0, at), ...argv.slice(at + 1)];
 if (!TOOLS[cmd]) {
   console.log(`usage: doppel <command> [args]
 
