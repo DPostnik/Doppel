@@ -1,0 +1,7 @@
+{
+  "name": "mirror",
+  "private": true,
+  "description": "The Electron app behind ../mirror.mjs; its dependencies live in ../package.json.",
+  "type": "module",
+  "main": "main.js"
+}

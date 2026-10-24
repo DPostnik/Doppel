@@ -1,0 +1,108 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+<title>Doppel</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    box-sizing: border-box;
+    font: 12px system-ui;
+    background: #1b1b1b;
+    color: #bbb;
+    overflow: hidden;
+    white-space: nowrap;
+    user-select: none;
+  }
+  /* macOS traffic lights sit over the left edge; the bar drags the window */
+  body { padding-left: 78px; -webkit-app-region: drag; }
+  button, input { -webkit-app-region: no-drag; font: inherit; color: #eee; }
+  button {
+    height: 24px;
+    padding: 0 9px;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    background: #262626;
+    cursor: pointer;
+  }
+  button:hover { border-color: #555; }
+  button[aria-pressed="true"] { background: #e5603b; border-color: #e5603b; color: #000; }
+  input {
+    flex: 1;
+    min-width: 120px;
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    background: #111;
+  }
+  .sep { width: 8px; }
+  .lbl { color: #888; }
+  #status { color: #888; min-width: 120px; text-align: right; }
+  #custom { flex: none; width: 92px; }
+</style>
+<button data-c="back" title="Back in both">&larr;</button>
+<button data-c="forward" title="Forward in both">&rarr;</button>
+<button data-c="reload" title="Reload both">&#x21bb;</button>
+<input id="path" spellcheck="false" placeholder="/path" />
+<span class="sep"></span>
+<span id="sizes"></span>
+<input id="custom" spellcheck="false" placeholder="1280x800" title="Any size: 1280x800, or 1280 for the pane's height. Enter applies." />
+<button data-c="fill" id="fill" title="Keep the width, fill the pane's height (off: the size's own height)">fill</button>
+<span class="sep"></span>
+<span id="themes"></span>
+<span class="sep"></span>
+<button data-c="devtools" data-a="a" id="dt-a" title="DevTools for A (Cmd+Opt+I in A, or right-click > Inspect)">devtools A</button>
+<button data-c="devtools" data-a="b" id="dt-b" title="DevTools for B (or right-click > Inspect in B)">devtools B</button>
+<span id="status"></span>
+<script>
+  const sizes = document.getElementById("sizes");
+  const path = document.getElementById("path");
+  let editing = false;
+  path.addEventListener("focus", () => (editing = true));
+  path.addEventListener("blur", () => (editing = false));
+  const custom = document.getElementById("custom");
+  custom.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") mirror.send("custom", custom.value);
+  });
+  path.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { mirror.send("go", path.value); path.blur(); }
+    if (e.key === "Escape") path.blur();
+  });
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (b) mirror.send(b.dataset.c, b.dataset.a);
+  });
+  mirror.onState((s) => {
+    if (s.presets && !sizes.childElementCount)
+      for (const [name, size] of s.presets) {
+        const b = document.createElement("button");
+        b.dataset.c = "size";
+        b.dataset.a = name;
+        b.textContent = name;
+        b.title = size ? size.join(" x ") : "the panes' own size";
+        sizes.append(b);
+      }
+    const themes = document.getElementById("themes");
+    if (s.themes && !themes.childElementCount)
+      for (const name of s.themes) {
+        const b = document.createElement("button");
+        b.dataset.c = "theme";
+        b.dataset.a = name;
+        b.textContent = name;
+        themes.append(b);
+      }
+    for (const b of sizes.children) b.setAttribute("aria-pressed", String(b.dataset.a === s.preset));
+    custom.setAttribute("aria-pressed", String(s.preset === "custom"));
+    custom.style.borderColor = s.preset === "custom" ? "#e5603b" : "";
+    document.getElementById("fill").setAttribute("aria-pressed", String(s.fill));
+    if (s.tools) for (const k of ["a", "b"]) document.getElementById("dt-" + k).setAttribute("aria-pressed", String(s.tools[k]));
+    if (s.path != null && !editing) path.value = s.path;
+    if (s.label) document.getElementById("status").textContent = s.label;
+  });
+</script>
