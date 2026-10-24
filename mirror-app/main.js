@@ -42,11 +42,17 @@ const pathOf = (u) => {
   }
 };
 
+// icon.png is rendered from icon.svg. The app runs unpackaged, so macOS would
+// show Electron's own icon in the Dock without this.
+const ICON = path.join(here, "icon.png");
+
 app.whenReady().then(async () => {
+  app.dock?.setIcon(ICON);
   const { workArea } = screen.getPrimaryDisplay();
   const win = new BaseWindow({
     ...workArea,
     title: "Doppel",
+    icon: ICON, // Linux and Windows; macOS takes the Dock icon above
     backgroundColor: "#3a3a3a", // shows through as the divider
     titleBarStyle: "hidden",
     trafficLightPosition: { x: 12, y: 13 },
