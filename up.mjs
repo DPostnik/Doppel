@@ -11,6 +11,10 @@
  * this checkout (or `install` run), is built with `build` and served with
  * `start` on the config's two ports. Logs: <worktree>.build.log, .serve.log.
  * Ctrl+C stops both. How to set a project up: README.md here.
+ *
+ *   --only b   rebuild and restart one side (a or b) and leave the other
+ *              running as it is, e.g. after an edit: `doppel up --only b HEAD .`
+ *              The mirror window keeps going and reloads that pane by itself.
  */
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -18,12 +22,26 @@ import path from "node:path";
 import { loadConfig, ownArgs } from "./config.mjs";
 
 const c = await loadConfig();
-const [refA, refB] = ownArgs(process.argv.slice(2));
+const argv = ownArgs(process.argv.slice(2));
+const only = argv.includes("--only") ? argv[argv.indexOf("--only") + 1] : null;
+const [refA, refB] = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== "--only");
 if (!refA || !refB) {
   console.error("usage: doppel up <refA> <refB>   (`.` = current checkout)");
   process.exit(2);
 }
-const sides = [refA, refB].map((ref, i) => ({ name: "ab"[i], ref, port: c.ports[i], dir: c.worktrees[i] }));
+const sides = [refA, refB].map((ref, i) => ({ name: "ab"[i], ref, port: c.ports[i], dir: c.worktrees[i] })).filter((s) => !only || s.name === only);
+if (only && !sides.length) {
+  console.error("--only takes a or b");
+  process.exit(2);
+}
+// Free the port of a side being rebuilt (its old server may belong to an
+// earlier `doppel up`). Only the process listening on it: `-a` ANDs the
+// filters, else lsof also lists every client connected to the port (the
+// mirror window, the other side's `up`) and they would be killed too.
+for (const s of sides)
+  try {
+    execFileSync("sh", ["-c", `lsof -nP -a -iTCP:${s.port} -sTCP:LISTEN -t | xargs kill 2>/dev/null; true`]);
+  } catch {}
 const git = (args, cwd = c.root) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 const sh = (cmd, cwd, env, log) =>
   new Promise((resolve, reject) => {

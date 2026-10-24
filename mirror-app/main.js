@@ -93,6 +93,22 @@ app.whenReady().then(async () => {
     state();
   };
   win.on("resize", layout);
+
+  // A pane whose server is down (being rebuilt by `doppel up --only b`, say)
+  // retries until it answers, so the window never needs a restart.
+  for (const [v, name] of [[a, "A"], [b, "B"]]) {
+    let retry = null;
+    v.webContents.on("did-fail-load", (_e, code, _desc, url, isMain) => {
+      if (!isMain || code === -3 || retry) return; // -3: aborted by a newer load
+      label = `${name}: waiting for its server...`;
+      state();
+      retry = setTimeout(() => {
+        retry = null;
+        if (!v.webContents.isDestroyed()) v.webContents.loadURL(url).catch(() => {});
+      }, 1500);
+    });
+    v.webContents.on("did-finish-load", () => layout());
+  }
   win.on("closed", () => app.quit());
 
   mirror({ source: a.webContents, target: b.webContents, originB: B, scale: () => scale });
