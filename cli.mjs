@@ -4,16 +4,18 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-const TOOLS = { up: "up.mjs", shots: "shots.mjs", mirror: "mirror.mjs" };
+const TOOLS = { up: "up.mjs", shots: "shots.mjs", styles: "styles.mjs", mirror: "mirror.mjs" };
 const [cmd, ...args] = process.argv.slice(2);
 if (!TOOLS[cmd]) {
   console.log(`usage: doppel <command> [args]
 
   up <refA> <refB>                serve both versions (\`.\` = your checkout as it is)
   shots [--all-themes] [--pages /,/a]   screenshot diff of every page and size
+  styles --root <sel> [--path /p] [--click <sel>]   computed-style diff, incl. :hover/:focus
   mirror [--selftest]             one window, A left and B right, input mirrored
 
-Run it inside a git checkout that has a doppel.config.mjs.`);
+Run it inside a git checkout that has a doppel.config.mjs. Every command also
+takes --ports 3241,3242 and --name <suffix> to run several comparisons at once.`);
   process.exit(cmd ? 2 : 0);
 }
 const here = path.dirname(new URL(import.meta.url).pathname);

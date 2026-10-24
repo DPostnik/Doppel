@@ -41,10 +41,15 @@ const argOf = (argv, name) => {
   return i >= 0 ? argv[i + 1] : null;
 };
 
-/** Strips --project/--config (and their values) so tools see only their own
+// Options every tool takes: --project <dir>, --config <file>, and overrides
+// for running several comparisons at once: --ports 3241,3242, --name <suffix>
+// (worktree folder names).
+const COMMON = ["--project", "--config", "--ports", "--name"];
+
+/** Strips the common options (and their values) so tools see only their own
  *  arguments. */
 export function ownArgs(argv) {
-  return argv.filter((a, i) => !["--project", "--config"].includes(a) && !["--project", "--config"].includes(argv[i - 1]));
+  return argv.filter((a, i) => !COMMON.includes(a) && !COMMON.includes(argv[i - 1]));
 }
 
 export async function loadConfig(argv = process.argv.slice(2)) {
@@ -60,6 +65,8 @@ export async function loadConfig(argv = process.argv.slice(2)) {
   const user = (await import(pathToFileURL(file).href)).default;
   const c = { ...DEFAULTS, ...user };
   c.name ||= path.basename(root);
+  if (argOf(argv, "--ports")) c.ports = argOf(argv, "--ports").split(",").map(Number);
+  if (argOf(argv, "--name")) c.name += `-${argOf(argv, "--name")}`;
   if (!c.start) throw new Error(`doppel: ${file} has no \`start\` command`);
   c.root = root;
   c.file = file;
