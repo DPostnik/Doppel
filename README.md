@@ -154,3 +154,21 @@ minute, Chromium's full stderr and the exit code; native crash dumps go to
 Pieces, if you want them elsewhere: `mirror-app/sync.js` replays input from
 one webContents in another; `mirror-app/viewport.js` emulates the sizes;
 `mirror-app/record.cjs` is the recording preload. None of them knows the site.
+
+## Troubleshooting
+
+| Message | What it means, what to do |
+|---|---|
+| `doppel up: unknown ref "<ref>"` | git does not know the ref. Nothing was stopped; fix the ref (`git fetch` for `origin/...`). |
+| `freeing :3142 (pid N cmd)` | Something listened on the side's port and was stopped: an older `doppel up`, or another server. Use `--ports` to keep away from servers you need. |
+| `:3142 is still taken by pid N` | The listener survived SIGTERM and SIGKILL (another user's process, say). Stop it yourself or choose other `--ports`. |
+| `` `<cmd>` failed in <dir>, see <log> `` | install or build failed on one side; the other side's build is stopped too. Read the log. |
+| `... did not come up in 2 minutes` | The server started but `ready` never answered below 500. Read `<tmp>/doppel-<name>-<hash>-a.serve.log`; check `start` uses `$PORT` and `ready` is a real path. |
+| `A <url> does not answer; run `doppel up` first` | `shots` or `styles` found no server on that port. |
+| `set CHROME=<path to a Chrome binary>` | No Chrome, Chromium, Brave or Edge was found. Point `CHROME` at one. |
+| `doppel: could not install Electron (...)` | The Electron download failed (no network). Run the printed command when online. |
+| `doppel: codesign failed on .../Doppel.app: ...` | The renamed app copy could not be signed; it was deleted and is rebuilt next run. |
+| `doppel: --ports takes two ports, e.g. 3241,3242` | `--ports` needs exactly two numbers from 1 to 65535. |
+| `selftest: no element for <sel> in A` | A project check names a selector the page no longer has. |
+| `selftest: timed out after 180 s; last check done: ...` | A check hangs; the line names the last one that finished. |
+| A pane says "waiting for its server..." | Its server is down or being rebuilt (`up --only`). The pane retries by itself. |
