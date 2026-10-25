@@ -16,10 +16,10 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import puppeteer from "puppeteer-core";
 import { PNG } from "pngjs";
 import pixelmatch from "pixelmatch";
 import { loadConfig, ownArgs } from "./config.mjs";
+import { assertUp, withBrowser } from "./browser.mjs";
 
 const c = await loadConfig();
 const argv = ownArgs(process.argv.slice(2));
@@ -28,7 +28,6 @@ const opt = (n) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : null);
 const pos = argv.filter((a, i) => !a.startsWith("--") && argv[i - 1] !== "--pages");
 const A = pos[0] || c.urls[0];
 const B = pos[1] || c.urls[1];
-const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const ROOT = c.root;
 
 const PAGES = opt("--pages") ? opt("--pages").split(",") : c.pages;
@@ -37,13 +36,18 @@ const SIZES = c.sizes;
 const THEMES = !c.theme ? [null] : flag("--all-themes") ? c.theme.values : [c.theme.values[0]];
 const MAX_H = 40000;
 
-const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+await assertUp({ A, B });
+
+// Local time to the second; a second run within the same second gets -2, -3.
+const d = new Date();
+const two = (n) => String(n).padStart(2, "0");
+const day = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+let stamp = day;
+for (let i = 2; fs.existsSync(path.join(c.out, stamp)); i++) stamp = `${day}-${i}`;
 const OUT = path.join(c.out, stamp);
 fs.mkdirSync(OUT, { recursive: true });
 
-const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ["--hide-scrollbars", "--font-render-hinting=none"] });
-
-async function shoot(base, route, w, h, theme) {
+async function shoot(browser, base, route, w, h, theme) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   await page.setViewport({ width: w, height: h });
@@ -92,13 +96,13 @@ const jobs = [];
 for (const route of PAGES) for (const [label, w, h] of SIZES) for (const theme of THEMES) jobs.push({ route, label, w, h, theme });
 const results = [];
 let next = 0;
-await Promise.all(
+await withBrowser((browser) => Promise.all(
   Array.from({ length: 3 }, async () => {
     while (next < jobs.length) {
       const j = jobs[next++];
       const name = `${j.label}${j.theme ? "-" + j.theme : ""}${j.route === "/" ? "-home" : j.route.replace(/[/?=&]+/g, "-")}`;
       try {
-        const [a, b] = await Promise.all([shoot(A, j.route, j.w, j.h, j.theme), shoot(B, j.route, j.w, j.h, j.theme)]);
+        const [a, b] = await Promise.all([shoot(browser, A, j.route, j.w, j.h, j.theme), shoot(browser, B, j.route, j.w, j.h, j.theme)]);
         const { n, diff, share } = compare(a, b);
         const r = { ...j, name, ha: a.height, hb: b.height, n, share };
         if (n || a.height !== b.height) {
@@ -114,8 +118,7 @@ await Promise.all(
       }
     }
   }),
-);
-await browser.close();
+));
 
 const order = Object.fromEntries(SIZES.map(([label], i) => [label, i]));
 results.sort((x, y) => (y.n || 0) - (x.n || 0) || PAGES.indexOf(x.route) - PAGES.indexOf(y.route) || order[x.label] - order[y.label]);
