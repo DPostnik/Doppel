@@ -60,6 +60,9 @@ Notes:
   rather than installed again, which takes seconds instead of minutes. If the
   two refs need different dependencies, set `install` (e.g. `npm ci`) instead.
 - Logs: `<tmp>/doppel-<name>-a.build.log`, `.serve.log`.
+- `doppel up --only b <refA> <refB>` rebuilds one side and leaves the other running.
+- `doppel up --annotate ...` adds the config's `annotate` env to side B only,
+  to switch on a review tool there (see below).
 - Ctrl+C stops both servers.
 
 ## Adding a project
@@ -75,6 +78,7 @@ export default {
   pages: ["/", "/pricing", "/docs"],       // what `doppel shots` shoots
   theme: { param: "theme", values: ["dark", "light"] }, // or null
   selftest: "./doppel.selftest.mjs",       // optional, see below
+  annotate: { NEXT_PUBLIC_REMARQ: "1" },   // optional, see below
 };
 ```
 
@@ -87,6 +91,15 @@ export default {
 
 3. Check it: `doppel up . .`, then `doppel shots` (expect 0 differences), then
    `doppel mirror --selftest` (generic checks: sizes, scroll, DevTools, theme).
+
+### A review widget in B (optional)
+
+A dev-only tool such as an annotation widget is not in a production build.
+To have it in the B pane anyway, let the project switch it on by an env
+variable at build time, name that variable in `annotate`, and run
+`doppel up --annotate <refA> <refB>`. Only B gets it: input in A is replayed
+in B, so a widget on both sides would act twice. Use it in B directly. Leave
+`--annotate` off for `doppel shots`, or B's screenshots show the widget.
 
 ### Project checks for `--selftest` (optional)
 
@@ -125,6 +138,12 @@ reload both; an address field; screen sizes (4K ... phone, or type any size
 like `1280x800`), each scaled to fit; `fill` keeps the size's width and uses
 the pane's full height; the theme buttons; DevTools under A or B (also
 Cmd+Opt+I in A, or right-click > Inspect).
+
+If the window crashes or a pane goes blank, look at the run's log:
+`~/Library/Logs/Doppel/mirror-<time>.log` (the last 30 runs). It has pane and
+process crashes, hangs, uncaught errors, page console errors, memory once a
+minute, Chromium's full stderr and the exit code; native crash dumps go to
+`crashdumps/` next to it.
 
 Pieces, if you want them elsewhere: `mirror-app/sync.js` replays input from
 one webContents in another; `mirror-app/viewport.js` emulates the sizes;

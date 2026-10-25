@@ -3,7 +3,7 @@
 // size (viewport.js), a theme or an address.
 //
 //   electron . [--a URL] [--b URL] [--path /] [--theme param=v1,v2]
-//              [--selftest [--selftest-file project-checks.mjs]]
+//              [--selftest [--selftest-file project-checks.mjs]] [--log file]
 //
 // Nothing here knows about a particular site: ../mirror.mjs passes what the
 // project's doppel.config.mjs says (URLs, the theme switch, its checks).
@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mirror } from "./sync.js";
 import { PRESETS, applyViewport, parseSize } from "./viewport.js";
+import { startLog, watchApp, watchPane } from "./watch.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = (name, def) => {
@@ -28,6 +29,7 @@ const THEMES = (() => {
 })();
 const SELFTEST = process.argv.includes("--selftest");
 const PROJECT_CHECKS = arg("selftest-file", null);
+const log = startLog(arg("log", null));
 
 const BAR = 40; // toolbar height
 const GAP = 6; // the divider between the panes
@@ -47,6 +49,7 @@ const pathOf = (u) => {
 const ICON = path.join(here, "icon.png");
 
 app.whenReady().then(async () => {
+  watchApp(log);
   app.dock?.setIcon(ICON);
   const { workArea } = screen.getPrimaryDisplay();
   const win = new BaseWindow({
@@ -66,6 +69,7 @@ app.whenReady().then(async () => {
   const a = view(path.join(here, "record.cjs"));
   const b = view();
   for (const v of [bar, a, b]) win.contentView.addChildView(v);
+  for (const [v, name] of [[bar, "toolbar"], [a, "A"], [b, "B"]]) watchPane(log, v.webContents, name);
 
   let preset = "window"; // a PRESETS key or "custom"
   let custom = null; // [width, height | null] typed in the toolbar
@@ -115,7 +119,7 @@ app.whenReady().then(async () => {
     });
     v.webContents.on("did-finish-load", () => layout());
   }
-  win.on("closed", () => app.quit());
+  win.on("closed", () => (log("window-closed"), app.quit()));
 
   mirror({ source: a.webContents, target: b.webContents, originB: B, scale: () => scale });
   a.webContents.on("did-navigate", state);

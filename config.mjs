@@ -21,6 +21,10 @@ export const DEFAULTS = {
   ready: "/", // path that answers once the server is up
   ports: [3141, 3142],
   env: {},
+  // Extra env for side B with `doppel up --annotate`: switches on a review
+  // tool (an annotation widget, say) in the version you look at, and only
+  // there, since input in A is replayed in B. null if the project has none.
+  annotate: null, // e.g. { NEXT_PUBLIC_REMARQ: "1" }
   pages: ["/"],
   sizes: [
     ["4k", 3840, 2160],

@@ -12,6 +12,8 @@
  * `start` on the config's two ports. Logs: <worktree>.build.log, .serve.log.
  * Ctrl+C stops both. How to set a project up: README.md here.
  *
+ *   --annotate add the config's `annotate` env to side B (a review widget
+ *              in B only); leave it off for `doppel shots`.
  *   --only b   rebuild and restart one side (a or b) and leave the other
  *              running as it is, e.g. after an edit: `doppel up --only b HEAD .`
  *              The mirror window keeps going and reloads that pane by itself.
@@ -32,6 +34,11 @@ if (!refA || !refB) {
 const sides = [refA, refB].map((ref, i) => ({ name: "ab"[i], ref, port: c.ports[i], dir: c.worktrees[i] })).filter((s) => !only || s.name === only);
 if (only && !sides.length) {
   console.error("--only takes a or b");
+  process.exit(2);
+}
+const annotate = argv.includes("--annotate");
+if (annotate && !c.annotate) {
+  console.error(`--annotate: ${c.file} has no \`annotate\` env`);
   process.exit(2);
 }
 // Free the port of a side being rebuilt (its old server may belong to an
@@ -67,7 +74,8 @@ function prepare(s) {
     }
   }
   s.label = s.ref === "." ? `${sha.slice(0, 7)} + working tree` : `${s.ref} (${sha.slice(0, 7)})`;
-  s.env = { ...process.env, ...c.env, PORT: String(s.port) };
+  s.env = { ...process.env, ...c.env, ...(annotate && s.name === "b" ? c.annotate : {}), PORT: String(s.port) };
+  if (annotate && s.name === "b") s.label += ", annotate";
 }
 
 async function waitUp(url) {
@@ -90,9 +98,17 @@ if (c.build) {
   await Promise.all(sides.map((s) => sh(c.build, s.dir, s.env, `${s.dir}.build.log`)));
 }
 
+// A server can end on its own (it crashed, or a later `doppel up --only`
+// freed its port): say which and where its log is; once none is left, end.
+let alive = sides.length;
 const servers = sides.map((s) => {
   const out = fs.openSync(`${s.dir}.serve.log`, "w");
-  return spawn(c.start, { cwd: s.dir, env: s.env, shell: true, stdio: ["ignore", out, out], detached: true });
+  const p = spawn(c.start, { cwd: s.dir, env: s.env, shell: true, stdio: ["ignore", out, out], detached: true });
+  p.on("exit", (code, signal) => {
+    console.error(`${s.name.toUpperCase()} on :${s.port} stopped (${signal || `code ${code}`}), see ${s.dir}.serve.log`);
+    if (--alive === 0) process.exit(1);
+  });
+  return p;
 });
 const stop = () => {
   for (const p of servers)

@@ -13,12 +13,17 @@
  *   --selftest   drive A, check B followed (generic checks, then the config's
  *                `selftest` file), print the results and quit
  *
+ * Each run writes a crash log (pane and process crashes, uncaught errors,
+ * memory once a minute, Chromium's full stderr, how it ended) to
+ * ~/Library/Logs/Doppel/mirror-<time>.log; the last 30 are kept.
+ *
  * Start the two versions first with up.mjs. Input is replayed by position, so
  * if the layouts differ, a click in B lands where the element was in A: that
  * mismatch is itself the finding.
  */
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { loadConfig, ownArgs } from "./config.mjs";
@@ -74,13 +79,26 @@ const args = [APP, "--a", a, "--b", b, "--path", start, ...argv.filter((x) => x.
 if (c.theme) args.push("--theme", `${c.theme.param}=${c.theme.values.join(",")}`);
 if (c.selftest) args.push("--selftest-file", c.selftest);
 
+const LOGS = process.platform === "darwin" ? path.join(os.homedir(), "Library/Logs/Doppel") : path.join(os.tmpdir(), "doppel-logs");
+fs.mkdirSync(LOGS, { recursive: true });
+for (const f of fs.readdirSync(LOGS).filter((f) => /^mirror-.*\.log$/.test(f)).sort().slice(0, -29)) fs.rmSync(path.join(LOGS, f));
+const logFile = path.join(LOGS, `mirror-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
+args.push("--log", logFile);
+console.log(`mirror: log ${logFile}`);
+
 const child = spawn(electron, args, { stdio: ["ignore", "inherit", "pipe"] });
-// Chromium logs GPU and network noise on stderr; pass through only the rest.
+// Chromium logs GPU and network noise on stderr: all of it goes to the log,
+// only the rest to the terminal.
 child.stderr.on("data", (d) => {
+  fs.appendFileSync(logFile, d);
   const s = String(d)
     .split("\n")
     .filter((l) => l && !/^\[\d+:\d+\/[\d.]+:(ERROR|WARNING|INFO|VERBOSE)/.test(l))
     .join("\n");
   if (s) process.stderr.write(s + "\n");
 });
-child.on("exit", (code) => process.exit(code ?? 0));
+child.on("exit", (code, signal) => {
+  fs.appendFileSync(logFile, `${new Date().toISOString()} doppel electron-exit ${JSON.stringify({ code, signal })}\n`);
+  if (code || signal) console.error(`mirror: Electron ended (${signal || `code ${code}`}), see ${logFile}`);
+  process.exit(code ?? (signal ? 1 : 0));
+});

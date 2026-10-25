@@ -102,7 +102,14 @@ export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, 
     }
     setPreset("fullhd");
     await wait(300);
-    await run(t);
+    // A check that throws (a selector the page no longer has) fails the run
+    // now, not after the three-minute timeout.
+    try {
+      await run(t);
+    } catch (e) {
+      fails++;
+      console.log(`FAIL project checks stopped: ${e.message.split("\n")[0]}`);
+    }
   }
 
   console.log(`memory: ${Math.round(metrics() / 1024)} MB in all processes`);
