@@ -92,6 +92,38 @@ export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, 
   await wait(600);
   check("right click: one menu, in A", [[menus.a - m0.a, menus.b - m0.b], [1, 0]]);
 
+  // A click on a link navigates B by the replayed click alone, once: the
+  // address sync must not load the page again on top. Any visible link to
+  // another page of the site will do.
+  const home = a.getURL();
+  const link = await js(a, `(() => {
+    for (const l of document.querySelectorAll("a[href]")) {
+      const u = new URL(l.href, location.href);
+      if (u.origin !== location.origin || u.pathname === location.pathname || l.target || l.hasAttribute("download") || l.hasAttribute("aria-haspopup")) continue;
+      const r = l.getBoundingClientRect(), x = r.x + r.width / 2, y = r.y + r.height / 2;
+      if (x >= 0 && y >= 0 && x < innerWidth && y < innerHeight && document.elementFromPoint(x, y)?.closest("a") === l) return [x, y, u.pathname];
+    }
+    return null;
+  })()`);
+  if (link) {
+    // Navigations started, not finished: a load aborted by a second one
+    // never finishes.
+    let navs = 0;
+    const count = (d) => d.isMainFrame && navs++;
+    b.on("did-start-navigation", count);
+    const [x, y] = [link[0], link[1]].map((v) => Math.round(v * scale()));
+    a.sendInputEvent({ type: "mouseMove", x, y });
+    await wait(50);
+    a.sendInputEvent({ type: "mouseDown", x, y, button: "left", clickCount: 1 });
+    a.sendInputEvent({ type: "mouseUp", x, y, button: "left", clickCount: 1 });
+    await wait(3000);
+    b.off("did-start-navigation", count);
+    const [pa, pb] = await both("location.pathname");
+    check(`click link ${link[2]}: B navigates once`, [[pa, pb, navs], [link[2], link[2], 1]]);
+    a.loadURL(home).catch(() => {}); // B follows
+    await wait(2000);
+  } else console.log("skip click link: no link to another page in view");
+
   if (themes) {
     theme(themes.values[1]);
     await wait(3000);
