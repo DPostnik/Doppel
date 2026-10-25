@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, toggleTools, theme, themes, project, metrics }) {
+export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, toggleTools, theme, themes, project, metrics, menus, enableFocus }) {
   const js = (wc, code) => wc.executeJavaScript(code);
   const both = async (code) => [await js(a, code), await js(b, code)];
   const center = async (sel) => {
@@ -37,10 +37,7 @@ export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, 
 
   // The window is shown inactive, so A has no focus either; pretend it has,
   // as when you use it.
-  try {
-    a.debugger.attach("1.3");
-    await a.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
-  } catch {}
+  await enableFocus(a);
   await wait(800);
 
   for (const p of ["4k", "phone", "fullhd"]) {
@@ -86,6 +83,14 @@ export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, 
   toggleTools("b");
   await wait(500);
   check("DevTools B closed, panes back", [(await js(a, "innerHeight")) === h0, true]);
+
+  // A right click in A opens one context menu (A's), not one per pane.
+  const m0 = { ...menus };
+  a.sendInputEvent({ type: "mouseMove", x: 300, y: 300 });
+  a.sendInputEvent({ type: "mouseDown", x: 300, y: 300, button: "right", clickCount: 1 });
+  a.sendInputEvent({ type: "mouseUp", x: 300, y: 300, button: "right", clickCount: 1 });
+  await wait(600);
+  check("right click: one menu, in A", [[menus.a - m0.a, menus.b - m0.b], [1, 0]]);
 
   if (themes) {
     theme(themes.values[1]);

@@ -11,7 +11,7 @@ import { app, crashReporter } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 
-export function startLog(file) {
+export function startLog(file, { selftest = false } = {}) {
   const line = (kind, data = {}) => {
     const s = `${new Date().toISOString()} doppel ${kind} ${JSON.stringify(data)}\n`;
     if (file) fs.appendFileSync(file, s);
@@ -20,7 +20,12 @@ export function startLog(file) {
   // Native crashes leave a minidump next to the logs (nothing is uploaded).
   if (file) app.setPath("crashDumps", path.join(path.dirname(file), "crashdumps"));
   crashReporter.start({ uploadToServer: false });
-  process.on("uncaughtException", (e) => line("uncaught-exception", { message: e.message, stack: e.stack }));
+  // In use the window lives on after an uncaught error; a selftest that hit
+  // one has failed, whatever its checks say.
+  process.on("uncaughtException", (e) => {
+    line("uncaught-exception", { message: e.message, stack: e.stack });
+    if (selftest) console.log(`FAIL uncaught: ${e.message}`), app.exit(1);
+  });
   process.on("unhandledRejection", (e) => line("unhandled-rejection", { message: String(e?.message ?? e), stack: e?.stack }));
   line("start", { electron: process.versions.electron, chrome: process.versions.chrome, argv: process.argv.slice(2) });
   return line;

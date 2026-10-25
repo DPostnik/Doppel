@@ -36,9 +36,12 @@ if (window.top === window) {
   };
   requestAnimationFrame(tick);
   const opt = { capture: true, passive: true };
+  // A right click (or Ctrl-click on a Mac) opens A's context menu; replayed,
+  // it would open B's too, a second menu on top of the first.
+  const menuClick = (e) => e.button === 2 || (e.button === 0 && e.ctrlKey && process.platform === "darwin");
   addEventListener("mousemove", (e) => { if (e.isTrusted) move = { t: "move", x: e.clientX, y: e.clientY, m: mods(e) }; }, opt);
-  addEventListener("mousedown", (e) => { if (e.isTrusted) { flush(); send({ t: "down", x: e.clientX, y: e.clientY, b: e.button, n: e.detail, m: mods(e) }); } }, opt);
-  addEventListener("mouseup", (e) => { if (e.isTrusted) { flush(); send({ t: "up", x: e.clientX, y: e.clientY, b: e.button, n: e.detail, m: mods(e) }); } }, opt);
+  addEventListener("mousedown", (e) => { if (e.isTrusted && !menuClick(e)) { flush(); send({ t: "down", x: e.clientX, y: e.clientY, b: e.button, n: e.detail, m: mods(e) }); } }, opt);
+  addEventListener("mouseup", (e) => { if (e.isTrusted && !menuClick(e)) { flush(); send({ t: "up", x: e.clientX, y: e.clientY, b: e.button, n: e.detail, m: mods(e) }); } }, opt);
   addEventListener("wheel", (e) => { if (e.isTrusted && innerScroller(e.target)) { flush(); send({ t: "wheel", x: e.clientX, y: e.clientY, dx: e.deltaX, dy: e.deltaY, m: mods(e) }); } }, opt);
   addEventListener("keydown", (e) => { if (e.isTrusted) send({ t: "kd", key: e.key, m: mods(e) }); }, opt);
   addEventListener("keyup", (e) => { if (e.isTrusted) send({ t: "ku", key: e.key, m: mods(e) }); }, opt);
