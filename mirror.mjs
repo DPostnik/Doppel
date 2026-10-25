@@ -26,17 +26,30 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { loadConfig, ownArgs } from "./config.mjs";
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath decodes %20 and non-ASCII; .pathname would not find node_modules.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.join(HERE, "mirror-app");
-// npm does not always run Electron's postinstall (the binary download).
-if (!fs.existsSync(path.join(HERE, "node_modules/electron/dist"))) {
-  console.log("doppel: installing dependencies into its node_modules (once)...");
-  execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: HERE, stdio: "inherit" });
-  execFileSync("node", ["node_modules/electron/install.js"], { cwd: HERE, stdio: "inherit" });
+const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+// npm does not always run Electron's postinstall (the binary download). Say
+// what is being done to Doppel's own node_modules, and if it fails (no
+// network, say) print the commands instead of a stack trace.
+let electron;
+try {
+  if (!fs.existsSync(path.join(HERE, "node_modules/electron/dist"))) {
+    console.log(`doppel: Electron binary missing, running npm install in ${HERE}`);
+    execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: HERE, stdio: "inherit" });
+    execFileSync(process.execPath, ["node_modules/electron/install.js"], { cwd: HERE, stdio: "inherit" });
+  }
+  electron = createRequire(path.join(HERE, "package.json"))("electron");
+} catch (e) {
+  console.error(`doppel: could not install Electron (${e.message.split("\n")[0]})
+run: cd ${q(HERE)} && npm install && node node_modules/electron/install.js`);
+  process.exit(1);
 }
-const electron = macBundle(createRequire(path.join(HERE, "package.json"))("electron"));
+electron = macBundle(electron);
 
 // macOS takes the Dock and menu-bar name from the app bundle, not from the
 // running app, so an unpackaged Electron shows up as "Electron". Run a copy
@@ -67,7 +80,15 @@ function macBundle(bin) {
     execFileSync("plutil", ["-replace", key, "-string", "Doppel", plist]);
   execFileSync("plutil", ["-replace", "CFBundleIdentifier", "-string", "com.dpostnik.doppel", plist]);
   // The edited Info.plist breaks Electron's ad-hoc signature; sign it again.
-  execFileSync("codesign", ["--force", "--sign", "-", dst], { stdio: "ignore" });
+  // On failure show codesign's own reason, and drop the copy so the next run
+  // builds it again instead of starting an unsigned app.
+  try {
+    execFileSync("codesign", ["--force", "--sign", "-", dst], { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (e) {
+    fs.rmSync(dst, { recursive: true, force: true });
+    console.error(`doppel: codesign failed on ${dst}: ${String(e.stderr || e.message).trim()}`);
+    process.exit(1);
+  }
   return exe;
 }
 
@@ -88,17 +109,37 @@ console.log(`mirror: log ${logFile}`);
 
 const child = spawn(electron, args, { stdio: ["ignore", "inherit", "pipe"] });
 // Chromium logs GPU and network noise on stderr: all of it goes to the log,
-// only the rest to the terminal.
+// only the rest to the terminal. The log gets it in batches every 500 ms, so a
+// burst of Chromium lines does not mean a synchronous write per chunk.
+let pending = [];
+const flush = () => {
+  if (pending.length) fs.appendFileSync(logFile, Buffer.concat(pending));
+  pending = [];
+};
+setInterval(flush, 500).unref();
+process.on("exit", flush);
 child.stderr.on("data", (d) => {
-  fs.appendFileSync(logFile, d);
+  pending.push(d);
   const s = String(d)
     .split("\n")
     .filter((l) => l && !/^\[\d+:\d+\/[\d.]+:(ERROR|WARNING|INFO|VERBOSE)/.test(l))
     .join("\n");
   if (s) process.stderr.write(s + "\n");
 });
-child.on("exit", (code, signal) => {
+// "close", not "exit": it comes after stderr is drained, so Chromium's last
+// lines (often the reason it died) are in the log before the exit line.
+child.on("close", (code, signal) => {
+  flush();
   fs.appendFileSync(logFile, `${new Date().toISOString()} doppel electron-exit ${JSON.stringify({ code, signal })}\n`);
   if (code || signal) console.error(`mirror: Electron ended (${signal || `code ${code}`}), see ${logFile}`);
   process.exit(code ?? (signal ? 1 : 0));
 });
+// On Ctrl+C or kill, let Electron quit and its stderr drain instead of dying
+// with lines still buffered; a second signal leaves at once.
+let stopping = false;
+for (const s of ["SIGINT", "SIGTERM"])
+  process.on(s, () => {
+    if (stopping) process.exit(130);
+    stopping = true;
+    child.kill(s);
+  });
