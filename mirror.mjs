@@ -26,17 +26,30 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { loadConfig, ownArgs } from "./config.mjs";
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath decodes %20 and non-ASCII; .pathname would not find node_modules.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.join(HERE, "mirror-app");
-// npm does not always run Electron's postinstall (the binary download).
-if (!fs.existsSync(path.join(HERE, "node_modules/electron/dist"))) {
-  console.log("doppel: installing dependencies into its node_modules (once)...");
-  execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: HERE, stdio: "inherit" });
-  execFileSync("node", ["node_modules/electron/install.js"], { cwd: HERE, stdio: "inherit" });
+const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+// npm does not always run Electron's postinstall (the binary download). Say
+// what is being done to Doppel's own node_modules, and if it fails (no
+// network, say) print the commands instead of a stack trace.
+let electron;
+try {
+  if (!fs.existsSync(path.join(HERE, "node_modules/electron/dist"))) {
+    console.log(`doppel: Electron binary missing, running npm install in ${HERE}`);
+    execFileSync("npm", ["install", "--no-audit", "--no-fund"], { cwd: HERE, stdio: "inherit" });
+    execFileSync(process.execPath, ["node_modules/electron/install.js"], { cwd: HERE, stdio: "inherit" });
+  }
+  electron = createRequire(path.join(HERE, "package.json"))("electron");
+} catch (e) {
+  console.error(`doppel: could not install Electron (${e.message.split("\n")[0]})
+run: cd ${q(HERE)} && npm install && node node_modules/electron/install.js`);
+  process.exit(1);
 }
-const electron = macBundle(createRequire(path.join(HERE, "package.json"))("electron"));
+electron = macBundle(electron);
 
 // macOS takes the Dock and menu-bar name from the app bundle, not from the
 // running app, so an unpackaged Electron shows up as "Electron". Run a copy
@@ -67,7 +80,15 @@ function macBundle(bin) {
     execFileSync("plutil", ["-replace", key, "-string", "Doppel", plist]);
   execFileSync("plutil", ["-replace", "CFBundleIdentifier", "-string", "com.dpostnik.doppel", plist]);
   // The edited Info.plist breaks Electron's ad-hoc signature; sign it again.
-  execFileSync("codesign", ["--force", "--sign", "-", dst], { stdio: "ignore" });
+  // On failure show codesign's own reason, and drop the copy so the next run
+  // builds it again instead of starting an unsigned app.
+  try {
+    execFileSync("codesign", ["--force", "--sign", "-", dst], { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (e) {
+    fs.rmSync(dst, { recursive: true, force: true });
+    console.error(`doppel: codesign failed on ${dst}: ${String(e.stderr || e.message).trim()}`);
+    process.exit(1);
+  }
   return exe;
 }
 

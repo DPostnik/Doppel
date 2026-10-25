@@ -3,6 +3,7 @@
 // project you are in (README.md).
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TOOLS = { up: "up.mjs", shots: "shots.mjs", styles: "styles.mjs", mirror: "mirror.mjs" };
 // The command is the first word that is not a common option or its value, so
@@ -24,7 +25,8 @@ Run it inside a git checkout that has a doppel.config.mjs. Every command also
 takes --ports 3241,3242 and --name <suffix> to run several comparisons at once.`);
   process.exit(cmd ? 2 : 0);
 }
-const here = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath decodes %20 and non-ASCII, so Doppel works from any folder.
+const here = path.dirname(fileURLToPath(import.meta.url));
 const child = spawn(process.execPath, [path.join(here, TOOLS[cmd]), ...args], { stdio: "inherit" });
 child.on("exit", (code, signal) => process.exit(signal ? 1 : (code ?? 0)));
 for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => child.kill(s));
