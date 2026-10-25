@@ -119,7 +119,8 @@ await withBrowser((browser) => Promise.all(
   Array.from({ length: 3 }, async () => {
     while (next < jobs.length) {
       const j = jobs[next++];
-      const name = `${j.label}${j.theme ? "-" + j.theme : ""}${j.route === "/" ? "-home" : j.route.replace(/[/?=&]+/g, "-")}`;
+      // Encoded, not squashed: /a-b and /a/b must not share one file.
+      const name = `${j.label}${j.theme ? "-" + j.theme : ""}-${j.route === "/" ? "home" : encodeURIComponent(j.route.replace(/^\//, "")).replace(/%/g, "_")}`;
       const weight = j.w >= 2560 ? 3 : 1;
       await acquire(weight);
       try {
