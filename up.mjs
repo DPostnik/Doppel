@@ -7,7 +7,7 @@
  *
  * A ref is anything git understands; `.` is the current checkout including
  * uncommitted and untracked changes. Each version gets its own git worktree
- * (<tmp>/doppel-<name>-a and -b), with the config's `link` paths linked from
+ * (<tmp>/doppel-<name>-<hash of the checkout path>-a and -b), with the config's `link` paths linked from
  * this checkout (or `install` run), is built with `build` and served with
  * `start` on the config's two ports. Logs: <worktree>.build.log, .serve.log.
  * Ctrl+C stops both. How to set a project up: README.md here.
@@ -41,85 +41,203 @@ if (annotate && !c.annotate) {
   console.error(`--annotate: ${c.file} has no \`annotate\` env`);
   process.exit(2);
 }
-// Free the port of a side being rebuilt (its old server may belong to an
-// earlier `doppel up`). Only the process listening on it: `-a` ANDs the
-// filters, else lsof also lists every client connected to the port (the
-// mirror window, the other side's `up`) and they would be killed too.
-for (const s of sides)
-  try {
-    execFileSync("sh", ["-c", `lsof -nP -a -iTCP:${s.port} -sTCP:LISTEN -t | xargs kill 2>/dev/null; true`]);
-  } catch {}
+// Every child (install, build, server) runs in its own process group, so one
+// kill ends it with all it started (sh -> npx -> next). Whatever way `up`
+// ends - Ctrl+C, a failed build, a server that never came up, a bug - the
+// children go with it, never left running without a terminal.
+const children = new Set();
+const run = (cmd, cwd, env, log) => {
+  const out = fs.openSync(log, "w");
+  const p = spawn(cmd, { cwd, env, shell: true, stdio: ["ignore", out, out], detached: true });
+  fs.closeSync(out); // the child has its own copy
+  // Kept after it ends unless it succeeded: the shell may die and leave
+  // what it started (next-server) running in the group.
+  children.add(p);
+  p.on("exit", (code) => code === 0 && children.delete(p));
+  return p;
+};
+process.on("exit", () => {
+  for (const p of children)
+    try {
+      process.kill(-p.pid);
+    } catch {}
+});
+const stop = (code) => process.exit(code);
+process.on("SIGINT", () => stop(0));
+process.on("SIGTERM", () => stop(0));
+for (const e of ["uncaughtException", "unhandledRejection"])
+  process.on(e, (err) => {
+    console.error(err);
+    stop(1);
+  });
+
 const git = (args, cwd = c.root) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 const sh = (cmd, cwd, env, log) =>
   new Promise((resolve, reject) => {
-    const out = fs.openSync(log, "w");
-    const p = spawn(cmd, { cwd, env, shell: true, stdio: ["ignore", out, out] });
+    const p = run(cmd, cwd, env, log);
+    p.on("error", reject); // the shell did not start
     p.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`\`${cmd}\` failed in ${cwd}, see ${log}`))));
   });
+// Runs cmd on every side at once; if one fails, stop() ends the others too.
+async function each(log, doing, cmd) {
+  console.log(`${doing} (${cmd})...`);
+  try {
+    await Promise.all(sides.map((s) => sh(cmd, s.dir, s.env, `${s.dir}.${log}.log`)));
+  } catch (e) {
+    console.error(e.message);
+    stop(1);
+  }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Check both refs before touching anything: a typo must not stop the servers
+// that are running now.
+for (const s of sides)
+  try {
+    s.sha = execFileSync("git", ["rev-parse", "--verify", "--quiet", `${s.ref === "." ? "HEAD" : s.ref}^{commit}`], {
+      cwd: c.root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    console.error(`doppel up: unknown ref "${s.ref}"`);
+    process.exit(2);
+  }
+
+// Pid and command name of whatever listens on the port. Only the listener:
+// `-a` ANDs the filters, else lsof also lists every client connected to the
+// port (the mirror window, the other side's `up`) and they would be killed too.
+function listeners(port) {
+  let out = "";
+  try {
+    out = execFileSync("lsof", ["-nP", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { encoding: "utf8" });
+  } catch {} // exit code 1: nothing listens
+  const found = [];
+  for (const line of out.split("\n"))
+    if (line[0] === "p") found.push({ pid: Number(line.slice(1)), cmd: "?" });
+    else if (line[0] === "c" && found.length) found.at(-1).cmd = line.slice(1);
+  return found;
+}
+const signal = (found, sig) => {
+  for (const l of found)
+    try {
+      process.kill(l.pid, sig);
+    } catch {}
+};
+
+// Free the port of a side being rebuilt (its old server may belong to an
+// earlier `doppel up`) and wait until it is free: a new server started while
+// the old one still listens gets EADDRINUSE, and the old one would answer the
+// ready check in its place.
+async function freePort(port) {
+  let found = listeners(port);
+  if (!found.length) return;
+  for (const l of found) console.log(`freeing :${port} (pid ${l.pid} ${l.cmd})`);
+  signal(found, "SIGTERM");
+  for (const [ms, next] of [[10000, "SIGKILL"], [2000, null]]) {
+    for (const end = Date.now() + ms; Date.now() < end && (found = listeners(port)).length; ) await sleep(200);
+    if (!found.length) return;
+    if (next) signal(found, next);
+  }
+  console.error(`:${port} is still taken by pid ${found.map((l) => l.pid).join(", ")}`);
+  process.exit(1);
+}
+
+const real = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+};
+const linked = (f) => c.link.some((p) => f === p || f.startsWith(p + "/"));
 
 function prepare(s) {
-  const head = s.ref === "." ? "HEAD" : s.ref;
-  const sha = git(["rev-parse", "--verify", head + "^{commit}"]);
-  if (fs.existsSync(s.dir)) git(["worktree", "remove", "--force", s.dir]);
+  const sha = s.sha;
+  // A folder there that is not a worktree of this repo (left after a crash or
+  // a `git worktree prune`) makes `git worktree remove` fail: delete it.
+  // Compared as real paths: on macOS $TMPDIR is behind the /var symlink.
+  const known = git(["worktree", "list", "--porcelain"])
+    .split("\n")
+    .filter((l) => l.startsWith("worktree "))
+    .map((l) => real(l.slice(9)));
+  if (fs.existsSync(s.dir))
+    try {
+      if (!known.includes(real(s.dir))) throw new Error("not a worktree");
+      execFileSync("git", ["worktree", "remove", "--force", s.dir], { cwd: c.root, stdio: "pipe" });
+    } catch {
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
   git(["worktree", "prune"]);
   git(["worktree", "add", "--detach", s.dir, sha]);
-  for (const p of c.link) if (fs.existsSync(path.join(c.root, p))) fs.symlinkSync(path.join(c.root, p), path.join(s.dir, p));
   if (s.ref === ".") {
-    // Uncommitted edits, then untracked files, copied over as they are.
+    // Uncommitted edits, then untracked files as they are: files copied,
+    // symlinks made again with the same target, anything else (a socket, a
+    // nested repo) skipped. Linked paths are left to the loop below.
     const diff = execFileSync("git", ["diff", "HEAD", "--binary"], { cwd: c.root });
     if (diff.length) execFileSync("git", ["apply", "--whitespace=nowarn"], { cwd: s.dir, input: diff });
     for (const f of git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean)) {
-      fs.mkdirSync(path.dirname(path.join(s.dir, f)), { recursive: true });
-      fs.copyFileSync(path.join(c.root, f), path.join(s.dir, f));
+      const from = path.join(c.root, f);
+      const to = path.join(s.dir, f);
+      const st = linked(f) ? null : fs.lstatSync(from, { throwIfNoEntry: false });
+      if (!st || !(st.isFile() || st.isSymbolicLink())) continue;
+      if (st.isSymbolicLink() && !fs.existsSync(from)) {
+        console.warn(`${s.name.toUpperCase()}: skipped ${f}, a broken symlink`);
+        continue;
+      }
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      if (st.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from), to);
+      else fs.copyFileSync(from, to);
     }
+  }
+  // Linked last, so that neither `git apply` nor the copy above can write
+  // through a link into your checkout. A tracked file in the way goes.
+  for (const p of c.link) {
+    const from = path.join(c.root, p);
+    const to = path.join(s.dir, p);
+    if (!fs.existsSync(from)) continue;
+    fs.rmSync(to, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.symlinkSync(from, to);
   }
   s.label = s.ref === "." ? `${sha.slice(0, 7)} + working tree` : `${s.ref} (${sha.slice(0, 7)})`;
   s.env = { ...process.env, ...c.env, ...(annotate && s.name === "b" ? c.annotate : {}), PORT: String(s.port) };
   if (annotate && s.name === "b") s.label += ", annotate";
 }
 
-async function waitUp(url) {
-  for (let i = 0; i < 240; i++) {
+// Two minutes in all. Each request has its own timeout: a server that
+// accepts the connection and never answers would hang `up` forever.
+async function waitUp(s) {
+  const url = `http://localhost:${s.port}${c.ready}`;
+  for (const end = Date.now() + 120000; Date.now() < end; await sleep(500))
     try {
-      if ((await fetch(url)).status < 500) return;
+      if ((await fetch(url, { signal: AbortSignal.timeout(3000) })).status < 500) return;
     } catch {}
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  throw new Error(`${url} did not come up`);
+  throw new Error(`${url} did not come up in 2 minutes, see ${s.dir}.serve.log`);
 }
 
+for (const s of sides) await freePort(s.port);
 for (const s of sides) prepare(s);
-if (c.install) {
-  console.log(`installing (${c.install})...`);
-  await Promise.all(sides.map((s) => sh(c.install, s.dir, s.env, `${s.dir}.install.log`)));
-}
-if (c.build) {
-  console.log(`building both versions (${c.build})...`);
-  await Promise.all(sides.map((s) => sh(c.build, s.dir, s.env, `${s.dir}.build.log`)));
-}
+if (c.install) await each("install", "installing", c.install);
+if (c.build) await each("build", "building", c.build);
 
 // A server can end on its own (it crashed, or a later `doppel up --only`
-// freed its port): say which and where its log is; once none is left, end.
+// freed its port): say which and where its log is. Before both are up that
+// is a failed start; after, once none is left, end.
+let ready = false;
 let alive = sides.length;
-const servers = sides.map((s) => {
-  const out = fs.openSync(`${s.dir}.serve.log`, "w");
-  const p = spawn(c.start, { cwd: s.dir, env: s.env, shell: true, stdio: ["ignore", out, out], detached: true });
-  p.on("exit", (code, signal) => {
+for (const s of sides)
+  run(c.start, s.dir, s.env, `${s.dir}.serve.log`).on("exit", (code, signal) => {
     console.error(`${s.name.toUpperCase()} on :${s.port} stopped (${signal || `code ${code}`}), see ${s.dir}.serve.log`);
-    if (--alive === 0) process.exit(1);
+    if (!ready || --alive === 0) stop(1);
   });
-  return p;
-});
-const stop = () => {
-  for (const p of servers)
-    try {
-      process.kill(-p.pid);
-    } catch {}
-  process.exit(0);
-};
-process.on("SIGINT", stop);
-process.on("SIGTERM", stop);
-await Promise.all(sides.map((s) => waitUp(`http://localhost:${s.port}${c.ready}`)));
+try {
+  await Promise.all(sides.map(waitUp));
+} catch (e) {
+  console.error(e.message);
+  stop(1);
+}
+ready = true;
 for (const s of sides) console.log(`${s.name.toUpperCase()}  http://localhost:${s.port}   ${s.label}`);
 console.log("\ndoppel mirror      # one window, A left and B right, your input mirrored");
 console.log("doppel shots       # screenshot diff at every size");
