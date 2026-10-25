@@ -84,22 +84,38 @@ export function mirror({ source, target, originB, scale }) {
       return "";
     }
   };
-  let navTimer;
+  let navTimer = null;
+  let waits = 0;
+  const follow = () => {
+    navTimer = null;
+    if (target.isDestroyed() || source.isDestroyed()) return;
+    const want = path(source.getURL());
+    if (!want || path(target.getURL()) === want) return;
+    // B is still loading, most likely the replayed click on a slower server:
+    // a load on top would abort it, so give it a while to get there itself.
+    if (target.isLoading() && waits++ < 5) return void (navTimer = setTimeout(follow, 700));
+    target.loadURL(originB + want).catch(() => {}); // a server down: main.js retries
+  };
   const onNav = () => {
     clearTimeout(navTimer);
-    navTimer = setTimeout(() => {
-      if (target.isDestroyed() || source.isDestroyed()) return;
-      const want = path(source.getURL());
-      if (want && path(target.getURL()) !== want) target.loadURL(originB + want);
-    }, 700);
+    waits = 0;
+    navTimer = setTimeout(follow, 700);
+  };
+  // B got to A's address by itself: nothing left to follow.
+  const onTargetNav = () => {
+    if (navTimer && path(target.getURL()) === path(source.getURL())) clearTimeout(navTimer), (navTimer = null);
   };
   source.on("did-navigate", onNav);
   source.on("did-navigate-in-page", onNav);
+  target.on("did-navigate", onTargetNav);
+  target.on("did-navigate-in-page", onTargetNav);
 
   return () => {
     ipcMain.off("mirror:input", onInput);
     source.off("did-navigate", onNav);
     source.off("did-navigate-in-page", onNav);
+    target.off("did-navigate", onTargetNav);
+    target.off("did-navigate-in-page", onTargetNav);
     clearTimeout(navTimer);
   };
 }
