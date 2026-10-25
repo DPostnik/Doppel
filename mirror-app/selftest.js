@@ -3,15 +3,30 @@
 // scroll, DevTools, theme); a project adds its own (clicks on its buttons,
 // menus, forms) in the file the config's `selftest` names, which gets the
 // helpers below as `t`. Prints one line per check; true when all pass.
+import { app } from "electron";
 import { pathToFileURL } from "node:url";
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const short = (code) => (code.length > 100 ? `${code.slice(0, 97)}...` : code).replace(/\s+/g, " ");
 
 export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, toggleTools, theme, themes, project, metrics, menus, enableFocus }) {
-  const js = (wc, code) => wc.executeJavaScript(code);
+  // Electron reports any error in the page as "Script failed to execute", so
+  // the code runs as an expression that hands its error back; a failure then
+  // names the pane, the error and the code.
+  const js = async (wc, code) => {
+    const side = wc === a ? "A" : wc === b ? "B" : "a page";
+    const r = await wc.executeJavaScript(`(async () => { try { return { v: await (${code}\n) }; } catch (e) { return { e: String(e) }; } })()`).catch(() => null);
+    if (r && "e" in r) throw new Error(`selftest: ${r.e} in ${side}, running ${short(code)}`);
+    if (r) return r.v;
+    // Not an expression (statements): run it as it is.
+    return wc.executeJavaScript(code).catch(() => {
+      throw new Error(`selftest: script failed in ${side}: ${short(code)}`);
+    });
+  };
   const both = async (code) => [await js(a, code), await js(b, code)];
   const center = async (sel) => {
-    const r = await js(a, `(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    const r = await js(a, `(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return null; const r = el.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    if (!r) throw new Error(`selftest: no element for ${sel} in A`);
     return r.map((v) => Math.round(v * scale()));
   };
   const click = async (sel) => {
@@ -27,9 +42,16 @@ export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, 
     a.sendInputEvent({ type: "keyUp", keyCode });
   };
   let fails = 0;
+  // A run that hangs (a page that never answers) says where it got to.
+  let last = "none";
+  const timer = setTimeout(() => {
+    console.log(`selftest: timed out after 180 s; last check done: ${last} (are both servers up?)`);
+    app.exit(2);
+  }, 180000);
   /** Passes when A and B agree and, if `want` is given, equal it. */
   const check = (name, [va, vb], want) => {
     const ok = JSON.stringify(va) === JSON.stringify(vb) && (want === undefined || JSON.stringify(va) === JSON.stringify(want));
+    last = name;
     if (!ok) fails++;
     console.log(`${ok ? "ok  " : "FAIL"} ${name}: A ${JSON.stringify(va)}  B ${JSON.stringify(vb)}`);
   };
@@ -149,6 +171,7 @@ export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, 
     }
   }
 
+  clearTimeout(timer);
   console.log(`memory: ${Math.round(metrics() / 1024)} MB in all processes`);
   console.log(fails ? `${fails} check(s) failed` : "all checks passed");
   return !fails;

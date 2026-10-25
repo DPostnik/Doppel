@@ -252,7 +252,6 @@ app.whenReady().then(async () => {
 
   if (SELFTEST) {
     win.showInactive(); // a hidden window gets no input
-    setTimeout(() => (console.log("selftest: timed out (are both servers up?)"), app.exit(2)), 180000);
     const { selftest } = await import("./selftest.js");
     const metrics = () => app.getAppMetrics().reduce((n, p) => n + p.memory.workingSetSize, 0);
     const ok = await selftest({ metrics, menus, enableFocus, a: a.webContents, b: b.webContents, scale: () => scale, setPreset: (p) => ((preset = p), layout()), setCustom: (t) => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "custom", t), themes: THEMES, project: PROJECT_CHECKS, toggleTools, toggleFill: () => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "fill"), theme: (t) => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "theme", t) });
