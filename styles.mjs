@@ -17,8 +17,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import puppeteer from "puppeteer-core";
 import { loadConfig, ownArgs } from "./config.mjs";
+import { assertUp, withBrowser } from "./browser.mjs";
 
 const c = await loadConfig();
 const argv = ownArgs(process.argv.slice(2));
@@ -35,7 +35,6 @@ if (!ROOTS.length) {
   console.error("usage: doppel styles --root <selector> [--root ...] [--path /p] [--click <selector>] [--widths 1920,390]");
   process.exit(2);
 }
-const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
 fs.mkdirSync(c.out, { recursive: true });
 const OUT = path.join(c.out, `styles-${stamp}.txt`);
@@ -45,7 +44,8 @@ const HEIGHT = 900;
 const MAX_FORCED = 80; // links/buttons/fields forced per run
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ["--hide-scrollbars", "--font-render-hinting=none"] });
+await assertUp({ A: A + PATH, B: B + PATH });
+let browser; // set by withBrowser in the run section
 
 /* ---------- in-page code ---------- */
 
@@ -237,30 +237,32 @@ function compare(scenario, ra, rb) {
 
 /* ---------- run ---------- */
 
-for (const sc of scenarios) {
-  process.stderr.write(`run ${sc.name}\n`);
-  try {
-    const [ra, rb] = await Promise.all([runState(A, sc), runState(B, sc)]);
-    if (ra.missing && rb.missing) { notes.push(`${sc.name}: skipped (${ra.missing} not visible in either)`); continue; }
-    if (ra.missing || rb.missing) { compared++; structural.push({ scenario: sc.name, msg: `${(ra.missing || rb.missing)} visible only in ${ra.missing ? "B" : "A"}` }); continue; }
-    compare(sc.name, ra, rb);
-  } catch (e) {
-    notes.push(`${sc.name}: ERROR ${e.message}`);
+await withBrowser(async (b) => {
+  browser = b;
+  for (const sc of scenarios) {
+    process.stderr.write(`run ${sc.name}\n`);
+    try {
+      const [ra, rb] = await Promise.all([runState(A, sc), runState(B, sc)]);
+      if (ra.missing && rb.missing) { notes.push(`${sc.name}: skipped (${ra.missing} not visible in either)`); continue; }
+      if (ra.missing || rb.missing) { compared++; structural.push({ scenario: sc.name, msg: `${(ra.missing || rb.missing)} visible only in ${ra.missing ? "B" : "A"}` }); continue; }
+      compare(sc.name, ra, rb);
+    } catch (e) {
+      notes.push(`${sc.name}: ERROR ${e.message}`);
+    }
   }
-}
-for (const sc of forcedRuns) {
-  process.stderr.write(`run forced ${sc.name}\n`);
-  try {
-    const [ra, rb] = await Promise.all([runForced(A, sc), runForced(B, sc)]);
-    if (ra.missing || rb.missing) { notes.push(`forced ${sc.name}: skipped (${ra.missing || rb.missing} not visible)`); continue; }
-    if (ra.skipped) notes.push(`forced ${sc.name}: only the first ${MAX_FORCED} interactive elements (${ra.skipped} more); narrow --root`);
-    compare(`${sc.name} :hover`, ra.hover, rb.hover);
-    compare(`${sc.name} :focus-visible`, ra.focus, rb.focus);
-  } catch (e) {
-    notes.push(`forced ${sc.name}: ERROR ${e.message}`);
+  for (const sc of forcedRuns) {
+    process.stderr.write(`run forced ${sc.name}\n`);
+    try {
+      const [ra, rb] = await Promise.all([runForced(A, sc), runForced(B, sc)]);
+      if (ra.missing || rb.missing) { notes.push(`forced ${sc.name}: skipped (${ra.missing || rb.missing} not visible)`); continue; }
+      if (ra.skipped) notes.push(`forced ${sc.name}: only the first ${MAX_FORCED} interactive elements (${ra.skipped} more); narrow --root`);
+      compare(`${sc.name} :hover`, ra.hover, rb.hover);
+      compare(`${sc.name} :focus-visible`, ra.focus, rb.focus);
+    } catch (e) {
+      notes.push(`forced ${sc.name}: ERROR ${e.message}`);
+    }
   }
-}
-await browser.close();
+});
 
 /* ---------- report ---------- */
 
