@@ -41,14 +41,6 @@ if (annotate && !c.annotate) {
   console.error(`--annotate: ${c.file} has no \`annotate\` env`);
   process.exit(2);
 }
-// Free the port of a side being rebuilt (its old server may belong to an
-// earlier `doppel up`). Only the process listening on it: `-a` ANDs the
-// filters, else lsof also lists every client connected to the port (the
-// mirror window, the other side's `up`) and they would be killed too.
-for (const s of sides)
-  try {
-    execFileSync("sh", ["-c", `lsof -nP -a -iTCP:${s.port} -sTCP:LISTEN -t | xargs kill 2>/dev/null; true`]);
-  } catch {}
 const git = (args, cwd = c.root) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 const sh = (cmd, cwd, env, log) =>
   new Promise((resolve, reject) => {
@@ -56,10 +48,63 @@ const sh = (cmd, cwd, env, log) =>
     const p = spawn(cmd, { cwd, env, shell: true, stdio: ["ignore", out, out] });
     p.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`\`${cmd}\` failed in ${cwd}, see ${log}`))));
   });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Check both refs before touching anything: a typo must not stop the servers
+// that are running now.
+for (const s of sides)
+  try {
+    s.sha = execFileSync("git", ["rev-parse", "--verify", "--quiet", `${s.ref === "." ? "HEAD" : s.ref}^{commit}`], {
+      cwd: c.root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    console.error(`doppel up: unknown ref "${s.ref}"`);
+    process.exit(2);
+  }
+
+// Pid and command name of whatever listens on the port. Only the listener:
+// `-a` ANDs the filters, else lsof also lists every client connected to the
+// port (the mirror window, the other side's `up`) and they would be killed too.
+function listeners(port) {
+  let out = "";
+  try {
+    out = execFileSync("lsof", ["-nP", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], { encoding: "utf8" });
+  } catch {} // exit code 1: nothing listens
+  const found = [];
+  for (const line of out.split("\n"))
+    if (line[0] === "p") found.push({ pid: Number(line.slice(1)), cmd: "?" });
+    else if (line[0] === "c" && found.length) found.at(-1).cmd = line.slice(1);
+  return found;
+}
+const signal = (found, sig) => {
+  for (const l of found)
+    try {
+      process.kill(l.pid, sig);
+    } catch {}
+};
+
+// Free the port of a side being rebuilt (its old server may belong to an
+// earlier `doppel up`) and wait until it is free: a new server started while
+// the old one still listens gets EADDRINUSE, and the old one would answer the
+// ready check in its place.
+async function freePort(port) {
+  let found = listeners(port);
+  if (!found.length) return;
+  for (const l of found) console.log(`freeing :${port} (pid ${l.pid} ${l.cmd})`);
+  signal(found, "SIGTERM");
+  for (const [ms, next] of [[10000, "SIGKILL"], [2000, null]]) {
+    for (const end = Date.now() + ms; Date.now() < end && (found = listeners(port)).length; ) await sleep(200);
+    if (!found.length) return;
+    if (next) signal(found, next);
+  }
+  console.error(`:${port} is still taken by pid ${found.map((l) => l.pid).join(", ")}`);
+  process.exit(1);
+}
 
 function prepare(s) {
-  const head = s.ref === "." ? "HEAD" : s.ref;
-  const sha = git(["rev-parse", "--verify", head + "^{commit}"]);
+  const sha = s.sha;
   if (fs.existsSync(s.dir)) git(["worktree", "remove", "--force", s.dir]);
   git(["worktree", "prune"]);
   git(["worktree", "add", "--detach", s.dir, sha]);
@@ -88,6 +133,7 @@ async function waitUp(url) {
   throw new Error(`${url} did not come up`);
 }
 
+for (const s of sides) await freePort(s.port);
 for (const s of sides) prepare(s);
 if (c.install) {
   console.log(`installing (${c.install})...`);
