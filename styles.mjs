@@ -35,9 +35,14 @@ if (!ROOTS.length) {
   console.error("usage: doppel styles --root <selector> [--root ...] [--path /p] [--click <selector>] [--widths 1920,390]");
   process.exit(2);
 }
-const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+// Local time to the second, as in shots; a second run within the same second
+// gets -2, -3 instead of overwriting the first report.
+const d = new Date();
+const two = (n) => String(n).padStart(2, "0");
+const day = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
 fs.mkdirSync(c.out, { recursive: true });
-const OUT = path.join(c.out, `styles-${stamp}.txt`);
+let OUT = path.join(c.out, `styles-${day}.txt`);
+for (let i = 2; fs.existsSync(OUT); i++) OUT = path.join(c.out, `styles-${day}-${i}.txt`);
 const WIDTHS = opt("--widths", "1920,1280,1000,768,390").split(",").map(Number);
 const THEMES = c.theme ? c.theme.values : [null];
 const HEIGHT = 900;
