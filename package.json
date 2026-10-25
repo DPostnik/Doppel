@@ -8,12 +8,16 @@
     "doppel": "cli.mjs"
   },
   "scripts": {
-    "postinstall": "node -e \"require('fs').existsSync('node_modules/electron/dist') || require('child_process').execFileSync('node', ['node_modules/electron/install.js'], { stdio: 'inherit' })\""
+    "postinstall": "node -e \"require('fs').existsSync('node_modules/electron/dist') || require('child_process').execFileSync('node', ['node_modules/electron/install.js'], { stdio: 'inherit' })\"",
+    "check": "for f in *.mjs mirror-app/*.js mirror-app/*.cjs; do node --check \"$f\" || exit 1; done"
   },
   "dependencies": {
-    "electron": "^45.0.0",
+    "electron": "45.0.0",
     "pixelmatch": "^5.3.0",
     "pngjs": "^7.0.0",
     "puppeteer-core": "^23.11.1"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

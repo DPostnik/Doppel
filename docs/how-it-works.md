@@ -61,18 +61,20 @@ doppel mirror                                 # uses the config's ports
 Dev mode adds noise (dev overlays, slower first load), but it is fine for looking by eye.
 `shots` should stay on `up` (production builds, stable).
 
-## Gaps seen in the code (not tested)
+## Known limits
 
 - `up` and the servers live in one terminal. Close it and both servers stop.
 - No command to point `up` at existing worktrees or to run `dev` instead of `build`+`start`.
 - Worktrees always go to `$TMPDIR` and are recreated each run.
+- Closing the window ends the app.
 
-## Crash: leads to check (hypotheses, not verified)
+## When the mirror window crashes
 
-- No crash reports for Doppel/Electron in `~/Library/Logs/DiagnosticReports`.
-  So it may be a renderer crash or a clean exit, not a main-process crash.
-- `main.js` has no `render-process-gone` / `unresponsive` handlers. A dead pane is not logged.
-- `mirror.mjs` filters Chromium stderr lines `[pid:tid/...:ERROR...]`. The crash reason may be hidden there.
-- `win.on("closed", () => app.quit())` - any window close ends the app.
-- Done: every run now logs to `~/Library/Logs/Doppel/mirror-<time>.log` (`mirror-app/watch.js`).
-  After the next crash, read the last lines of the newest log.
+Every run logs to `~/Library/Logs/Doppel/mirror-<time>.log` (`mirror-app/watch.js`):
+dead or hung panes, dead helper processes, uncaught errors, page console
+errors, memory once a minute, Chromium's full stderr and the exit code.
+Native crash dumps go to `crashdumps/` next to the logs. After a crash, read
+the last lines of the newest log.
+
+Robustness fixes from the 2026-10-25 audit: `docs/audit-2026-10-25.md`,
+`docs/plan-robustness.md`.
