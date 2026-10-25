@@ -41,13 +41,53 @@ if (annotate && !c.annotate) {
   console.error(`--annotate: ${c.file} has no \`annotate\` env`);
   process.exit(2);
 }
+// Every child (install, build, server) runs in its own process group, so one
+// kill ends it with all it started (sh -> npx -> next). Whatever way `up`
+// ends - Ctrl+C, a failed build, a server that never came up, a bug - the
+// children go with it, never left running without a terminal.
+const children = new Set();
+const run = (cmd, cwd, env, log) => {
+  const out = fs.openSync(log, "w");
+  const p = spawn(cmd, { cwd, env, shell: true, stdio: ["ignore", out, out], detached: true });
+  fs.closeSync(out); // the child has its own copy
+  // Kept after it ends unless it succeeded: the shell may die and leave
+  // what it started (next-server) running in the group.
+  children.add(p);
+  p.on("exit", (code) => code === 0 && children.delete(p));
+  return p;
+};
+process.on("exit", () => {
+  for (const p of children)
+    try {
+      process.kill(-p.pid);
+    } catch {}
+});
+const stop = (code) => process.exit(code);
+process.on("SIGINT", () => stop(0));
+process.on("SIGTERM", () => stop(0));
+for (const e of ["uncaughtException", "unhandledRejection"])
+  process.on(e, (err) => {
+    console.error(err);
+    stop(1);
+  });
+
 const git = (args, cwd = c.root) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 const sh = (cmd, cwd, env, log) =>
   new Promise((resolve, reject) => {
-    const out = fs.openSync(log, "w");
-    const p = spawn(cmd, { cwd, env, shell: true, stdio: ["ignore", out, out] });
+    const p = run(cmd, cwd, env, log);
+    p.on("error", reject); // the shell did not start
     p.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`\`${cmd}\` failed in ${cwd}, see ${log}`))));
   });
+// Runs cmd on every side at once; if one fails, stop() ends the others too.
+async function each(log, doing, cmd) {
+  console.log(`${doing} (${cmd})...`);
+  try {
+    await Promise.all(sides.map((s) => sh(cmd, s.dir, s.env, `${s.dir}.${log}.log`)));
+  } catch (e) {
+    console.error(e.message);
+    stop(1);
+  }
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Check both refs before touching anything: a typo must not stop the servers
@@ -123,49 +163,39 @@ function prepare(s) {
   if (annotate && s.name === "b") s.label += ", annotate";
 }
 
-async function waitUp(url) {
-  for (let i = 0; i < 240; i++) {
+// Two minutes in all. Each request has its own timeout: a server that
+// accepts the connection and never answers would hang `up` forever.
+async function waitUp(s) {
+  const url = `http://localhost:${s.port}${c.ready}`;
+  for (const end = Date.now() + 120000; Date.now() < end; await sleep(500))
     try {
-      if ((await fetch(url)).status < 500) return;
+      if ((await fetch(url, { signal: AbortSignal.timeout(3000) })).status < 500) return;
     } catch {}
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  throw new Error(`${url} did not come up`);
+  throw new Error(`${url} did not come up in 2 minutes, see ${s.dir}.serve.log`);
 }
 
 for (const s of sides) await freePort(s.port);
 for (const s of sides) prepare(s);
-if (c.install) {
-  console.log(`installing (${c.install})...`);
-  await Promise.all(sides.map((s) => sh(c.install, s.dir, s.env, `${s.dir}.install.log`)));
-}
-if (c.build) {
-  console.log(`building both versions (${c.build})...`);
-  await Promise.all(sides.map((s) => sh(c.build, s.dir, s.env, `${s.dir}.build.log`)));
-}
+if (c.install) await each("install", "installing", c.install);
+if (c.build) await each("build", "building", c.build);
 
 // A server can end on its own (it crashed, or a later `doppel up --only`
-// freed its port): say which and where its log is; once none is left, end.
+// freed its port): say which and where its log is. Before both are up that
+// is a failed start; after, once none is left, end.
+let ready = false;
 let alive = sides.length;
-const servers = sides.map((s) => {
-  const out = fs.openSync(`${s.dir}.serve.log`, "w");
-  const p = spawn(c.start, { cwd: s.dir, env: s.env, shell: true, stdio: ["ignore", out, out], detached: true });
-  p.on("exit", (code, signal) => {
+for (const s of sides)
+  run(c.start, s.dir, s.env, `${s.dir}.serve.log`).on("exit", (code, signal) => {
     console.error(`${s.name.toUpperCase()} on :${s.port} stopped (${signal || `code ${code}`}), see ${s.dir}.serve.log`);
-    if (--alive === 0) process.exit(1);
+    if (!ready || --alive === 0) stop(1);
   });
-  return p;
-});
-const stop = () => {
-  for (const p of servers)
-    try {
-      process.kill(-p.pid);
-    } catch {}
-  process.exit(0);
-};
-process.on("SIGINT", stop);
-process.on("SIGTERM", stop);
-await Promise.all(sides.map((s) => waitUp(`http://localhost:${s.port}${c.ready}`)));
+try {
+  await Promise.all(sides.map(waitUp));
+} catch (e) {
+  console.error(e.message);
+  stop(1);
+}
+ready = true;
 for (const s of sides) console.log(`${s.name.toUpperCase()}  http://localhost:${s.port}   ${s.label}`);
 console.log("\ndoppel mirror      # one window, A left and B right, your input mirrored");
 console.log("doppel shots       # screenshot diff at every size");
