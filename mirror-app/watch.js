@@ -36,9 +36,26 @@ export function watchPane(log, wc, name) {
   wc.on("unresponsive", () => log("pane-unresponsive", { pane: name, url: wc.getURL() }));
   wc.on("responsive", () => log("pane-responsive", { pane: name }));
   wc.on("preload-error", (_e, file, err) => log("preload-error", { pane: name, file, message: err.message }));
+  // A page that spams console.error would slow the main process and swell
+  // the log: up to 20 a minute per pane, then one line with how many more.
+  let since = 0;
+  let count = 0;
+  let more = 0;
+  let timer = null;
+  const flush = () => {
+    if (more) log("console-error", { pane: name, message: `... ${more} more` });
+    clearTimeout(timer);
+    since = Date.now();
+    count = more = 0;
+  };
   wc.on("console-message", (e) => {
-    if (e.level === "error") log("console-error", { pane: name, message: e.message, source: `${e.sourceId}:${e.lineNumber}` });
+    if (e.level !== "error") return;
+    if (Date.now() - since >= 60000) flush();
+    if (count++ < 20) return log("console-error", { pane: name, message: e.message, source: `${e.sourceId}:${e.lineNumber}` });
+    // The minute's count is written even if the page goes quiet.
+    if (!more++) timer = setTimeout(flush, since + 60000 - Date.now()).unref();
   });
+  process.on("exit", () => more && flush());
 }
 
 export function watchApp(log) {

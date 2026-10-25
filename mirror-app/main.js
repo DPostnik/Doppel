@@ -232,7 +232,9 @@ app.whenReady().then(async () => {
     else if (cmd === "back") both.forEach((wc) => wc.navigationHistory.canGoBack() && wc.navigationHistory.goBack());
     else if (cmd === "forward") both.forEach((wc) => wc.navigationHistory.canGoForward() && wc.navigationHistory.goForward());
     else if (cmd === "go") {
-      const p = String(val || "/").trim();
+      // A whole address pasted in (from B, from a browser) keeps only its path.
+      let p = String(val || "/").trim();
+      if (/^https?:/i.test(p)) p = pathOf(p) || "/";
       load(a.webContents, A + (p.startsWith("/") ? p : `/${p}`));
     }
   };
@@ -254,7 +256,7 @@ app.whenReady().then(async () => {
     win.showInactive(); // a hidden window gets no input
     const { selftest } = await import("./selftest.js");
     const metrics = () => app.getAppMetrics().reduce((n, p) => n + p.memory.workingSetSize, 0);
-    const ok = await selftest({ metrics, menus, enableFocus, a: a.webContents, b: b.webContents, scale: () => scale, setPreset: (p) => ((preset = p), layout()), setCustom: (t) => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "custom", t), themes: THEMES, project: PROJECT_CHECKS, toggleTools, toggleFill: () => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "fill"), theme: (t) => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "theme", t) });
+    const ok = await selftest({ metrics, menus, enableFocus, a: a.webContents, b: b.webContents, scale: () => scale, setPreset: (p) => ((preset = p), layout()), setCustom: (t) => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "custom", t), themes: THEMES, project: PROJECT_CHECKS, toggleTools, toggleFill: () => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "fill"), theme: (t) => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "theme", t), go: (p) => ipcMain.emit("mirror:ctl", { sender: bar.webContents }, "go", p) });
     app.exit(ok ? 0 : 1);
   } else console.log(`mirror: A ${A}  B ${B}  (drive the left pane)`);
 });

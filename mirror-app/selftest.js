@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const short = (code) => (code.length > 100 ? `${code.slice(0, 97)}...` : code).replace(/\s+/g, " ");
 
-export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, toggleTools, theme, themes, project, metrics, menus, enableFocus }) {
+export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, toggleTools, theme, themes, project, metrics, menus, enableFocus, go }) {
   // Electron reports any error in the page as "Script failed to execute", so
   // the code runs as an expression that hands its error back; a failure then
   // names the pane, the error and the code.
@@ -145,6 +145,23 @@ export async function selftest({ a, b, scale, setPreset, setCustom, toggleFill, 
     a.loadURL(home).catch(() => {}); // B follows
     await wait(2000);
   } else console.log("skip click link: no link to another page in view");
+
+  // The mouse leaving A takes B's hover away as well.
+  const hover = () => both(`!!document.querySelector("body:hover")`);
+  a.sendInputEvent({ type: "mouseMove", x: 300, y: 300 });
+  await wait(300);
+  const over = await hover();
+  a.sendInputEvent({ type: "mouseLeave", x: -1, y: -1 });
+  await wait(300);
+  check("mouse leaves A: B drops its hover", [[...over, ...(await hover())], [true, true, false, false]]);
+
+  // A whole address typed in the toolbar keeps only its path, on A's server.
+  go("http://elsewhere.invalid:9/?doppel=1#top");
+  await wait(2000);
+  check("full URL typed: its path only", await both("location.pathname + location.search + location.hash"), "/?doppel=1#top");
+  check("full URL typed: A's server", [new URL(a.getURL()).origin, new URL(home).origin]);
+  a.loadURL(home).catch(() => {});
+  await wait(2000);
 
   if (themes) {
     theme(themes.values[1]);

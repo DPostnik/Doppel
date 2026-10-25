@@ -42,6 +42,9 @@ if (window.top === window) {
   addEventListener("mousemove", (e) => { if (e.isTrusted) move = { t: "move", x: e.clientX, y: e.clientY, m: mods(e) }; }, opt);
   addEventListener("mousedown", (e) => { if (e.isTrusted && !menuClick(e)) { flush(); send({ t: "down", x: e.clientX, y: e.clientY, b: e.button, n: e.detail, m: mods(e) }); } }, opt);
   addEventListener("mouseup", (e) => { if (e.isTrusted && !menuClick(e)) { flush(); send({ t: "up", x: e.clientX, y: e.clientY, b: e.button, n: e.detail, m: mods(e) }); } }, opt);
+  // The mouse left the page (no element to go to): move B's off its page too,
+  // or B keeps the last hover.
+  addEventListener("mouseout", (e) => { if (e.isTrusted && !e.relatedTarget) { move = null; send({ t: "move", x: -1, y: -1, m: mods(e) }); } }, opt);
   addEventListener("wheel", (e) => { if (e.isTrusted && innerScroller(e.target)) { flush(); send({ t: "wheel", x: e.clientX, y: e.clientY, dx: e.deltaX, dy: e.deltaY, m: mods(e) }); } }, opt);
   addEventListener("keydown", (e) => { if (e.isTrusted) send({ t: "kd", key: e.key, m: mods(e) }); }, opt);
   addEventListener("keyup", (e) => { if (e.isTrusted) send({ t: "ku", key: e.key, m: mods(e) }); }, opt);
