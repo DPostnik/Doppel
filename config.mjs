@@ -5,6 +5,7 @@
 // The project is the git checkout you run a tool from (or --project <dir>);
 // its config is <project>/doppel.config.mjs (or --config <file>).
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -75,7 +76,10 @@ export async function loadConfig(argv = process.argv.slice(2)) {
   c.root = root;
   c.file = file;
   c.urls = c.ports.map((p) => `http://localhost:${p}`);
-  c.worktrees = ["a", "b"].map((s) => path.join(os.tmpdir(), `doppel-${c.name}-${s}`));
+  // The hash of the checkout's path keeps two projects with the same folder
+  // name (two `app`s) from sharing, and removing, each other's worktrees.
+  const hash = createHash("sha1").update(root).digest("hex").slice(0, 6);
+  c.worktrees = ["a", "b"].map((s) => path.join(os.tmpdir(), `doppel-${c.name}-${hash}-${s}`));
   c.out = path.join(root, ".doppel");
   if (c.selftest) c.selftest = path.resolve(path.dirname(file), c.selftest);
   return c;

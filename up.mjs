@@ -7,7 +7,7 @@
  *
  * A ref is anything git understands; `.` is the current checkout including
  * uncommitted and untracked changes. Each version gets its own git worktree
- * (<tmp>/doppel-<name>-a and -b), with the config's `link` paths linked from
+ * (<tmp>/doppel-<name>-<hash of the checkout path>-a and -b), with the config's `link` paths linked from
  * this checkout (or `install` run), is built with `build` and served with
  * `start` on the config's two ports. Logs: <worktree>.build.log, .serve.log.
  * Ctrl+C stops both. How to set a project up: README.md here.
@@ -143,20 +143,62 @@ async function freePort(port) {
   process.exit(1);
 }
 
+const real = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+};
+const linked = (f) => c.link.some((p) => f === p || f.startsWith(p + "/"));
+
 function prepare(s) {
   const sha = s.sha;
-  if (fs.existsSync(s.dir)) git(["worktree", "remove", "--force", s.dir]);
+  // A folder there that is not a worktree of this repo (left after a crash or
+  // a `git worktree prune`) makes `git worktree remove` fail: delete it.
+  // Compared as real paths: on macOS $TMPDIR is behind the /var symlink.
+  const known = git(["worktree", "list", "--porcelain"])
+    .split("\n")
+    .filter((l) => l.startsWith("worktree "))
+    .map((l) => real(l.slice(9)));
+  if (fs.existsSync(s.dir))
+    try {
+      if (!known.includes(real(s.dir))) throw new Error("not a worktree");
+      execFileSync("git", ["worktree", "remove", "--force", s.dir], { cwd: c.root, stdio: "pipe" });
+    } catch {
+      fs.rmSync(s.dir, { recursive: true, force: true });
+    }
   git(["worktree", "prune"]);
   git(["worktree", "add", "--detach", s.dir, sha]);
-  for (const p of c.link) if (fs.existsSync(path.join(c.root, p))) fs.symlinkSync(path.join(c.root, p), path.join(s.dir, p));
   if (s.ref === ".") {
-    // Uncommitted edits, then untracked files, copied over as they are.
+    // Uncommitted edits, then untracked files as they are: files copied,
+    // symlinks made again with the same target, anything else (a socket, a
+    // nested repo) skipped. Linked paths are left to the loop below.
     const diff = execFileSync("git", ["diff", "HEAD", "--binary"], { cwd: c.root });
     if (diff.length) execFileSync("git", ["apply", "--whitespace=nowarn"], { cwd: s.dir, input: diff });
     for (const f of git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean)) {
-      fs.mkdirSync(path.dirname(path.join(s.dir, f)), { recursive: true });
-      fs.copyFileSync(path.join(c.root, f), path.join(s.dir, f));
+      const from = path.join(c.root, f);
+      const to = path.join(s.dir, f);
+      const st = linked(f) ? null : fs.lstatSync(from, { throwIfNoEntry: false });
+      if (!st || !(st.isFile() || st.isSymbolicLink())) continue;
+      if (st.isSymbolicLink() && !fs.existsSync(from)) {
+        console.warn(`${s.name.toUpperCase()}: skipped ${f}, a broken symlink`);
+        continue;
+      }
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      if (st.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from), to);
+      else fs.copyFileSync(from, to);
     }
+  }
+  // Linked last, so that neither `git apply` nor the copy above can write
+  // through a link into your checkout. A tracked file in the way goes.
+  for (const p of c.link) {
+    const from = path.join(c.root, p);
+    const to = path.join(s.dir, p);
+    if (!fs.existsSync(from)) continue;
+    fs.rmSync(to, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.symlinkSync(from, to);
   }
   s.label = s.ref === "." ? `${sha.slice(0, 7)} + working tree` : `${s.ref} (${sha.slice(0, 7)})`;
   s.env = { ...process.env, ...c.env, ...(annotate && s.name === "b" ? c.annotate : {}), PORT: String(s.port) };

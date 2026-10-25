@@ -33,7 +33,7 @@ versions can be built and run at the same time without touching your
 checkout.
 
 `doppel up <refA> <refB>` makes one worktree per side in the system temp folder
-(`doppel-<name>-a`, `-b`), each detached at its ref, then installs or links
+(`doppel-<name>-<hash>-a`, `-b`), each detached at its ref, then installs or links
 dependencies, builds and starts both. A ref is anything git accepts:
 
 | you want to compare | command |
@@ -54,12 +54,18 @@ does report something on identical code, fix that first (see "Noise" below).
 
 Notes:
 - The worktrees are throwaway: `doppel up` removes and recreates them each run.
-  Do not edit or commit in them. `git worktree list` shows them; `git worktree
-  prune` forgets ones whose folder is gone.
+  Do not edit or commit in them. `<hash>` is 6 hex digits of your checkout's
+  path, so two projects in folders of the same name keep apart. A folder in
+  the way that git does not know as a worktree is deleted. `git worktree list`
+  shows them; `git worktree prune` forgets ones whose folder is gone (the
+  system empties its temp folder now and then), and `git worktree remove
+  <dir>` drops old ones named without the hash.
 - Dependencies are linked from your checkout (`link`, default `node_modules`)
   rather than installed again, which takes seconds instead of minutes. If the
   two refs need different dependencies, set `install` (e.g. `npm ci`) instead.
-- Logs: `<tmp>/doppel-<name>-a.build.log`, `.serve.log`.
+- Logs: `<tmp>/doppel-<name>-<hash>-a.build.log`, `.serve.log`.
+- Untracked files of `.` are copied as files and symlinks; a broken symlink is
+  skipped with a warning, sockets and nested repos are skipped.
 - `doppel up --only b <refA> <refB>` rebuilds one side and leaves the other running.
 - `doppel up --annotate ...` adds the config's `annotate` env to side B only,
   to switch on a review tool there (see below).
