@@ -109,17 +109,37 @@ console.log(`mirror: log ${logFile}`);
 
 const child = spawn(electron, args, { stdio: ["ignore", "inherit", "pipe"] });
 // Chromium logs GPU and network noise on stderr: all of it goes to the log,
-// only the rest to the terminal.
+// only the rest to the terminal. The log gets it in batches every 500 ms, so a
+// burst of Chromium lines does not mean a synchronous write per chunk.
+let pending = [];
+const flush = () => {
+  if (pending.length) fs.appendFileSync(logFile, Buffer.concat(pending));
+  pending = [];
+};
+setInterval(flush, 500).unref();
+process.on("exit", flush);
 child.stderr.on("data", (d) => {
-  fs.appendFileSync(logFile, d);
+  pending.push(d);
   const s = String(d)
     .split("\n")
     .filter((l) => l && !/^\[\d+:\d+\/[\d.]+:(ERROR|WARNING|INFO|VERBOSE)/.test(l))
     .join("\n");
   if (s) process.stderr.write(s + "\n");
 });
-child.on("exit", (code, signal) => {
+// "close", not "exit": it comes after stderr is drained, so Chromium's last
+// lines (often the reason it died) are in the log before the exit line.
+child.on("close", (code, signal) => {
+  flush();
   fs.appendFileSync(logFile, `${new Date().toISOString()} doppel electron-exit ${JSON.stringify({ code, signal })}\n`);
   if (code || signal) console.error(`mirror: Electron ended (${signal || `code ${code}`}), see ${logFile}`);
   process.exit(code ?? (signal ? 1 : 0));
 });
+// On Ctrl+C or kill, let Electron quit and its stderr drain instead of dying
+// with lines still buffered; a second signal leaves at once.
+let stopping = false;
+for (const s of ["SIGINT", "SIGTERM"])
+  process.on(s, () => {
+    if (stopping) process.exit(130);
+    stopping = true;
+    child.kill(s);
+  });
