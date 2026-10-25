@@ -57,7 +57,29 @@ export function ownArgs(argv) {
   return argv.filter((a, i) => !COMMON.includes(a) && !COMMON.includes(argv[i - 1]));
 }
 
+// Bad overrides end the tool here, with code 2 like any usage error, rather
+// than as http://localhost:NaN or a worktree path with a slash in it.
+function usage(message) {
+  console.error(`doppel: ${message}`);
+  process.exit(2);
+}
+function overrides(argv) {
+  let ports, name;
+  if (argv.includes("--ports")) {
+    ports = String(argOf(argv, "--ports")).split(",");
+    const ok = ports.length === 2 && ports.every((p) => /^\d+$/.test(p) && p >= 1 && p <= 65535);
+    if (!ok) usage("--ports takes two ports, e.g. 3241,3242");
+    ports = ports.map(Number);
+  }
+  if (argv.includes("--name")) {
+    name = argOf(argv, "--name");
+    if (!/^[A-Za-z0-9._-]+$/.test(name || "")) usage("--name takes letters, digits, `.`, `_` and `-`, e.g. --name fix-menu");
+  }
+  return { ports, name };
+}
+
 export async function loadConfig(argv = process.argv.slice(2)) {
+  const over = overrides(argv);
   const from = argOf(argv, "--project") || process.cwd();
   let root;
   try {
@@ -70,8 +92,8 @@ export async function loadConfig(argv = process.argv.slice(2)) {
   const user = (await import(pathToFileURL(file).href)).default;
   const c = { ...DEFAULTS, ...user };
   c.name ||= path.basename(root);
-  if (argOf(argv, "--ports")) c.ports = argOf(argv, "--ports").split(",").map(Number);
-  if (argOf(argv, "--name")) c.name += `-${argOf(argv, "--name")}`;
+  if (over.ports) c.ports = over.ports;
+  if (over.name) c.name += `-${over.name}`;
   if (!c.start) throw new Error(`doppel: ${file} has no \`start\` command`);
   c.root = root;
   c.file = file;
